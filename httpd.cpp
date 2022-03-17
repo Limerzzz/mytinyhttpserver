@@ -2,7 +2,7 @@
  * @Author: Limer
  * @Date: 2022-03-04 13:09:31
  * @LastEditors: Limer
- * @LastEditTime: 2022-03-14 13:04:30
+ * @LastEditTime: 2022-03-17 13:27:03
  * @Description: This is a  program of tiny http server.
  */
 #include <arpa/inet.h>
@@ -58,6 +58,7 @@ void bad_request(int client) {
     sprintf(buf, "such as a POST without a Content-Length.\r\n");
     send(client, buf, sizeof(buf), 0);
 }
+
 void execute_cgi(int client, const char* path, const char* method,
                  const char* query_string) {
     char buf[BUF_SIZE];
@@ -124,7 +125,8 @@ void execute_cgi(int client, const char* path, const char* method,
         close(cgi_input[1]);
 
         sprintf(meth_env, "REQUEST_METHOD=%s", method);
-        // TODO putenv()????
+        // ! add a environment variable
+        // ! the variable string must be "name=value".
         putenv(meth_env);
 
         if(strcasecmp(method, "GET") == 0) {
@@ -134,10 +136,12 @@ void execute_cgi(int client, const char* path, const char* method,
         else {
             sprintf(length_env, "CONTENT_LENGTH=%d", content_len);
         }
+        // execute post.cgi
         execl(path, path, NULL);
         exit(0);
-    }
-    else {
+    }else {
+        // Parent process read message from socket and send to the child process.
+        // Parent process recieve message from child process and send to socket.
         close(cgi_output[1]);
         close(cgi_input[0]);
         if(strcasecmp(method, "POST") == 0) {
@@ -155,8 +159,13 @@ void execute_cgi(int client, const char* path, const char* method,
         waitpid(pid, &status, 0);
     }
 }
+/**
+ * @description: send content of file
+ * @param {int} client
+ * @param {FILE*} resource
+ * @return {*}
+ */
 void cat(int client, FILE* resource) {
-    //发送文件的内容
     char buf[1024];
     fgets(buf, sizeof(buf), resource);
     while(!feof(resource)) {
@@ -164,6 +173,12 @@ void cat(int client, FILE* resource) {
         fgets(buf, sizeof(buf), resource);
     }
 }
+/**
+ * @description: send the header of http message
+ * @param {int} client_sockfd
+ * @param {char*} filename
+ * @return {*}
+ */
 void headers(int client_sockfd, const char* filename) {
     char buf[1024];
     (void)filename; /* could use filename to determine file type */
@@ -177,7 +192,11 @@ void headers(int client_sockfd, const char* filename) {
     strcpy(buf, "\r\n");
     send(client_sockfd, buf, strlen(buf), 0);
 }
-// return 404 error page
+/**
+ * @description:return 404 error page
+ * @param {int} client_sockfd
+ * @return {*}
+ */
 void not_found(int client_sockfd) {
     char buf[1024];
     sprintf(buf, "HTTP/1.0 404 NOT FOUND\r\n");
@@ -199,6 +218,12 @@ void not_found(int client_sockfd) {
     sprintf(buf, "</BODY></HTML>\r\n");
     send(client_sockfd, buf, strlen(buf), 0);
 }
+/**
+ * @description:
+ * @param {int} client_sockfd
+ * @param {char*} filename
+ * @return {*}
+ */
 void serve_file(int client_sockfd, const char* filename) {
     FILE* resource = nullptr;
     int numchars   = 1;
@@ -226,7 +251,7 @@ void error_die(const std::string& str) {
     exit(1);
 }
 /**
- * @description: create a socket, bind a sockaddr and listen the socket. 
+ * @description: create a socket, bind a sockaddr and listen the socket.
  * @param {int&} port, the listen port
  * @return {int} return the sockfd
  */
@@ -262,7 +287,15 @@ int startup(int& port) {
         error_die("listen");
     return httpd;
 }
-// parse a line http message
+
+/**
+ * @description:parse a line of http message
+ * @param {int} sockfd
+ * @param {char*} buf
+ * @param {size_t} buf_size
+ * @return {*} number of line length.
+ * * tips: all lines of http message end with '\r\n'
+ */
 int get_line(int sockfd, char* buf, size_t buf_size) {
     int i  = 0;
     char c = '\0';
@@ -271,8 +304,7 @@ int get_line(int sockfd, char* buf, size_t buf_size) {
         // get a char from buffer of client fd
         n = recv(sockfd, &c, 1, 0);
         if(n > 0) {
-            // '\r' == /
-            if(c == '\r') {
+            if(c == '\r') {  // maybe read to end of line
                 n = recv(sockfd, &c, 1, MSG_PEEK);
                 if((n > 0) && (c == '\n'))
                     recv(sockfd, &c, 1, 0);
@@ -290,9 +322,13 @@ int get_line(int sockfd, char* buf, size_t buf_size) {
     return i;
 }
 
+/**
+ * @description:sent 501 to indicate that this method is unimplement.
+ * @param {int} sockfd
+ * @return {*}
+ */
 void unimplemented(int sockfd) {
     char buf[1024];
-    // sent 501 to indicate that this method is unimplement.
     sprintf(buf, "HTTP/1.0 501 Method Not Implemented\r\n");
     send(sockfd, buf, strlen(buf), 0);
     sprintf(buf, SERVER_STRING);
@@ -327,15 +363,19 @@ void* accept_request(void* from_client) {
 
     numchars = get_line(client_sockfd, buf, sizeof(buf));
 
+    // extract the method string of buf
+    // ! The method string  ends with a blank space.
     i = 0, j = 0;
     while(buf[i] != ' ' && i < METHOD_SIZE) {
-        // extract the method string of buf
         method[i] = buf[j];
         ++i;
         ++j;
     }
     method[i] = '\0';
 
+    // if the method is not "GET" or "POST", server will return a unimplement
+    // page.
+    // ! If str1 is same as str2, the strcasecmp() will return 0.
     if(strcasecmp(method, "GET") && strcasecmp(method, "POST")) {
         unimplemented(client_sockfd);
         return nullptr;
@@ -347,8 +387,8 @@ void* accept_request(void* from_client) {
     i = 0;
     while(isspace(buf[j]) && (j < sizeof(buf)))
         ++j;
-
-    while(isspace(buf[j]) && (i < sizeof(url) - 1) && (j < sizeof(buf))) {
+    // isspace():Checks if the given character is a whitespace character
+    while(!isspace(buf[j]) && (i < sizeof(url) - 1) && (j < sizeof(buf))) {
         url[i] = buf[j];
         ++i;
         ++j;
@@ -367,19 +407,31 @@ void* accept_request(void* from_client) {
             ++query_string;
         }
     }
-
+    // url maybe is "/test.html"
+    // ! sprintf(): send formatted output to the string pointed to by str
     sprintf(path, "httpdocs%s", url);
 
+    // if the url doesn't determine a filename, the server will send the
+    // test.html.
     if(path[strlen(path) - 1] == '/') {
         strcat(path, "test.html");
     }
+    // if stat() return -1, it represents the path is error.
+    if(stat(path, &st) == -1){
+        while((numchars > 0) && strcmp("/n",buf))
+            numchars = get_line(client_sockfd, buf, sizeof(buf));   
+        not_found(client_sockfd);
+    }
     else {
+        // if request target is directory, the server will send test.html
         if((st.st_mode & S_IFMT) == S_IFDIR)
             strcat(path, "/test.html");
+        // if the file can be implemented.
         if((st.st_mode & S_IXUSR) || (st.st_mode & S_IXGRP)
            || (st.st_mode & S_IXOTH))
             cgi = 1;
-        if(!cgi)
+        
+        if(!cgi)// send the test.html
             serve_file(client_sockfd, path);
         else
             execute_cgi(client_sockfd, path, method, query_string);
